@@ -1,358 +1,353 @@
 import { useState } from "react";
-import { DataRecord, ValidationError } from "@/types/data";
-import { ProductLaunch } from "@/types/product";
-import { validateCsvData } from "@/utils/validation";
-import { generateDescriptionsForAllProducts } from "@/utils/openai";
-import { FileUpload } from "@/components/FileUpload";
-import { DataTable } from "@/components/DataTable";
-import { ValidationResults } from "@/components/ValidationResults";
+import { CampaignSidebar, CampaignConfig, CampaignFiles } from "@/components/CampaignSidebar";
+import { CampaignResults } from "@/components/CampaignResults";
 import { OpenAIKeyInput } from "@/components/OpenAIKeyInput";
-import { ExportButton } from "@/components/ExportButton";
-import { ProductLaunchWizard } from "@/components/ProductLaunchWizard";
-import { UserSegmentManager } from "@/components/UserSegmentManager";
-import { OpenAPIIntegration } from "@/components/OpenAPIIntegration";
 import { Progress } from "@/components/ui/progress";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Target, Zap, Users, Database, TrendingUp } from "lucide-react";
+import { Globe, Palette, Languages, TrendingUp, AlertTriangle, Download } from "lucide-react";
 import { toast } from "sonner";
+import { 
+  generateCampaignContent, 
+  generateCampaignImage, 
+  generateSEOKeywords, 
+  validateCompliance,
+  cleanText,
+  CampaignResult 
+} from "@/utils/campaignGenerator";
 
 const Index = () => {
-  const [rawData, setRawData] = useState<any[]>([]);
-  const [fileName, setFileName] = useState<string>("");
-  const [validData, setValidData] = useState<DataRecord[]>([]);
-  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
-  const [enrichedData, setEnrichedData] = useState<DataRecord[]>([]);
+  const [config, setConfig] = useState<CampaignConfig>({
+    businessUnit: "BU1-Dog",
+    languages: ["EN"],
+    campaignName: "Gut Health Autumn Launch",
+    petType: "Dog",
+    segment: "New Owner",
+    brandVoice: "Warm, expert, fun",
+    tone: "Friendly",
+    regions: ["US"],
+    defaultHashtags: "#GutHealth #PuppyStrong #BoneBoost"
+  });
+  
+  const [files, setFiles] = useState<CampaignFiles>({});
+  const [results, setResults] = useState<CampaignResult[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
-  const [showAIInput, setShowAIInput] = useState(false);
-  const [productLaunches, setProductLaunches] = useState<ProductLaunch[]>([]);
-  const [generatedPosts, setGeneratedPosts] = useState<any[]>([]);
+  const [apiKey, setApiKey] = useState<string>("");
+  const [showApiInput, setShowApiInput] = useState(false);
 
-  const handleFileLoad = (data: any[], name: string) => {
-    setRawData(data);
-    setFileName(name);
-    setEnrichedData([]);
-    setShowAIInput(false);
-    
-    // Validate the data
-    const { valid, errors } = validateCsvData(data);
-    setValidData(valid);
-    setValidationErrors(errors);
-    
-    toast.success(`Loaded ${data.length} rows from ${name}`);
-  };
+  const handleGenerateCampaign = async () => {
+    if (!files.catalog || config.languages.length === 0) {
+      toast.error("Please upload a product catalog and select at least one language");
+      return;
+    }
 
-  const handleGenerateDescriptions = async (apiKey: string) => {
-    if (validData.length === 0) {
-      toast.error("No valid data to process");
+    if (!apiKey) {
+      setShowApiInput(true);
       return;
     }
 
     setIsGenerating(true);
     setGenerationProgress(0);
+    setResults([]);
 
     try {
-      const enriched = await generateDescriptionsForAllProducts(
-        validData,
-        apiKey,
-        (current, total) => {
+      const campaignResults: CampaignResult[] = [];
+      const total = files.catalog.length * config.languages.length;
+      let current = 0;
+
+      // Create analytics and feedback dictionaries
+      const analyticsDict: { [key: string]: any } = {};
+      const feedbackDict: { [key: string]: any } = {};
+
+      if (files.analytics) {
+        files.analytics.forEach((row: any) => {
+          if (row.product_name) {
+            analyticsDict[row.product_name] = row;
+          }
+        });
+      }
+
+      if (files.feedback) {
+        files.feedback.forEach((row: any) => {
+          if (row.product_name) {
+            feedbackDict[row.product_name] = row;
+          }
+        });
+      }
+
+      for (const product of files.catalog) {
+        for (const language of config.languages) {
+          current++;
           setGenerationProgress((current / total) * 100);
+
+          const productName = cleanText(product.product_name || `SKU_${current}`);
+          const category = cleanText(product.category || "");
+          const ingredients = cleanText(product.ingredients || "");
+          const benefits = cleanText(product.benefits || "");
+          const price = product.price ? `$${product.price}` : "";
+          
+          const analyticData = analyticsDict[productName];
+          const analyticKeywords = analyticData?.seo_keywords || "";
+          
+          const feedbackData = feedbackDict[productName];
+          const feedbackText = feedbackData?.comment || "";
+
+          // Generate content
+          const description = await generateCampaignContent(
+            productName,
+            category,
+            ingredients,
+            benefits,
+            price,
+            config,
+            language,
+            analyticKeywords,
+            feedbackText,
+            apiKey
+          );
+
+          // Generate SEO keywords from content
+          const seoKeywords = generateSEOKeywords(description, analyticKeywords);
+
+          // Validate compliance
+          const complianceIssues = validateCompliance(description, config.regions);
+
+          // Generate image
+          const imagePrompt = `${config.petType} food campaign for ${config.segment} | ${config.tone} | ${config.brandVoice} | ${productName} | Campaign: ${config.campaignName}`;
+          const imageUrl = await generateCampaignImage(imagePrompt);
+
+          campaignResults.push({
+            sku: productName,
+            language,
+            campaign: config.campaignName,
+            businessUnit: config.businessUnit,
+            segment: config.segment,
+            petType: config.petType,
+            brandVoice: config.brandVoice,
+            tone: config.tone,
+            description,
+            seoKeywords,
+            hashtags: config.defaultHashtags,
+            complianceIssues: complianceIssues.join("; "),
+            imageUrl,
+            date: new Date().toISOString().split('T')[0]
+          });
+
+          // Small delay to prevent rate limiting
+          if (current < total) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
         }
-      );
-      
-      setEnrichedData(enriched);
-      toast.success("Successfully generated all product descriptions!");
+      }
+
+      setResults(campaignResults);
+      toast.success(`Generated content for ${campaignResults.length} campaign variations!`);
     } catch (error) {
-      console.error("Error generating descriptions:", error);
-      toast.error("Failed to generate descriptions. Please check your API key.");
+      console.error("Error generating campaign:", error);
+      toast.error("Failed to generate campaign content. Please check your API key.");
     } finally {
       setIsGenerating(false);
       setGenerationProgress(0);
     }
   };
 
-  const handleLaunchCreated = (launch: ProductLaunch) => {
-    setProductLaunches(prev => [...prev, launch]);
-  };
+  const handleExportResults = () => {
+    if (results.length === 0) return;
 
-  const handleContentGenerated = (posts: any[]) => {
-    setGeneratedPosts(prev => [...prev, ...posts]);
+    const csvContent = [
+      ["SKU", "Language", "Campaign", "Business Unit", "Segment", "Pet Type", "Brand Voice", "Tone", "Description & IG Post", "SEO Keywords", "Hashtags", "Compliance Issues", "Image URL", "Date"],
+      ...results.map(result => [
+        result.sku,
+        result.language,
+        result.campaign,
+        result.businessUnit,
+        result.segment,
+        result.petType,
+        result.brandVoice,
+        result.tone,
+        result.description,
+        result.seoKeywords,
+        result.hashtags,
+        result.complianceIssues,
+        result.imageUrl || "",
+        result.date
+      ])
+    ].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", "campaign_assets.csv");
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast.success("Campaign assets exported successfully!");
   };
 
   const stats = [
-    { title: "Product Launches", value: productLaunches.length, icon: Target, color: "text-blue-600" },
-    { title: "Generated Posts", value: generatedPosts.length, icon: TrendingUp, color: "text-green-600" },
-    { title: "CSV Files Processed", value: rawData.length > 0 ? 1 : 0, icon: Database, color: "text-purple-600" },
-    { title: "Valid Records", value: validData.length, icon: BarChart3, color: "text-orange-600" }
+    { title: "Business Units", value: "3", icon: Globe, color: "text-blue-600" },
+    { title: "Languages Supported", value: config.languages.length, icon: Languages, color: "text-green-600" },
+    { title: "Campaign Results", value: results.length, icon: TrendingUp, color: "text-purple-600" },
+    { title: "Products Processed", value: files.catalog?.length || 0, icon: Palette, color: "text-orange-600" }
   ];
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-6 space-y-8">
-        <div className="text-center space-y-4">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
-            Pet Product Marketing Automation Platform
-          </h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Launch dog food products with AI-powered SEO optimization, personalized social media content, and comprehensive marketing automation
-          </p>
-          
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
-            {stats.map((stat, index) => (
-              <Card key={index}>
-                <CardContent className="p-4 text-center">
-                  <stat.icon className={`h-8 w-8 mx-auto mb-2 ${stat.color}`} />
-                  <div className="text-2xl font-bold">{stat.value}</div>
-                  <div className="text-sm text-muted-foreground">{stat.title}</div>
-                </CardContent>
-              </Card>
-            ))}
+      <div className="flex">
+        <CampaignSidebar
+          config={config}
+          files={files}
+          onConfigChange={setConfig}
+          onFilesChange={setFiles}
+          onGenerateCampaign={handleGenerateCampaign}
+          isGenerating={isGenerating}
+        />
+        
+        <div className="flex-1 p-6 space-y-8">
+          <div className="text-center space-y-4">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
+              🐾 Multi-BU Multi-Language Campaign Generator
+            </h1>
+            <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
+              Power complex, brand-safe, personalized content and image creation for pet brands across multiple business units and languages
+            </p>
+            
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
+              {stats.map((stat, index) => (
+                <Card key={index}>
+                  <CardContent className="p-4 text-center">
+                    <stat.icon className={`h-8 w-8 mx-auto mb-2 ${stat.color}`} />
+                    <div className="text-2xl font-bold">{stat.value}</div>
+                    <div className="text-sm text-muted-foreground">{stat.title}</div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <Tabs defaultValue="product-launch" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="product-launch" className="flex items-center gap-2">
-              <Target className="h-4 w-4" />
-              Product Launch
-            </TabsTrigger>
-            <TabsTrigger value="user-segments" className="flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              User Segments
-            </TabsTrigger>
-            <TabsTrigger value="data-processing" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              Data Processing
-            </TabsTrigger>
-            <TabsTrigger value="api-integration" className="flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              API Integration
-            </TabsTrigger>
-            <TabsTrigger value="analytics" className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              Analytics
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="product-launch">
+          {!files.catalog ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>📋 Quick Start Guide</CardTitle>
+                <CardDescription>
+                  Get started with multi-language campaign generation
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="p-4 border rounded-lg">
+                      <h4 className="font-semibold mb-2">1. Upload Product Catalog</h4>
+                      <p className="text-sm text-muted-foreground">
+                        CSV with columns: product_name, category, ingredients, benefits, price
+                      </p>
+                    </div>
+                    <div className="p-4 border rounded-lg">
+                      <h4 className="font-semibold mb-2">2. Configure Campaign</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Set business unit, languages, target segments, and brand voice
+                      </p>
+                    </div>
+                    <div className="p-4 border rounded-lg">
+                      <h4 className="font-semibold mb-2">3. Generate Content</h4>
+                      <p className="text-sm text-muted-foreground">
+                        AI creates personalized content and images for all configurations
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-muted p-4 rounded-lg">
+                    <h4 className="font-semibold mb-2">✨ Optional Enhancement Files:</h4>
+                    <ul className="text-sm space-y-1">
+                      <li>• <strong>Analytics CSV:</strong> product_name, seo_keywords, engagement_rate</li>
+                      <li>• <strong>Feedback CSV:</strong> product_name, comment, rating</li>
+                    </ul>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
             <div className="space-y-6">
-              <ProductLaunchWizard onLaunchCreated={handleLaunchCreated} />
-              
-              {productLaunches.length > 0 && (
+              {showApiInput && (
                 <Card>
                   <CardHeader>
-                    <CardTitle>Recent Product Launches</CardTitle>
+                    <CardTitle>🔑 OpenAI API Configuration</CardTitle>
                     <CardDescription>
-                      Track your product launch campaigns and their performance
+                      Enter your OpenAI API key to generate high-quality content
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {productLaunches.map((launch) => (
-                        <div key={launch.id} className="flex justify-between items-center p-4 border rounded-lg">
-                          <div className="space-y-1">
-                            <h3 className="font-medium">{launch.name}</h3>
-                            <div className="flex gap-2">
-                              <Badge variant="outline">{launch.category.replace('_', ' ')}</Badge>
-                              <Badge variant="secondary">{launch.status}</Badge>
-                              <Badge>${launch.price}</Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              SEO Keywords: {launch.seoKeywords.length} | 
-                              Social Posts: {launch.socialMediaCopy.instagram.length}
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-sm text-muted-foreground">Launch Date</div>
-                            <div className="font-medium">{launch.launchDate || 'TBD'}</div>
-                          </div>
-                        </div>
-                      ))}
+                      <div className="space-y-2">
+                        <Label htmlFor="api-key">OpenAI API Key</Label>
+                        <Input
+                          id="api-key"
+                          type="password"
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          placeholder="sk-..."
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          onClick={handleGenerateCampaign}
+                          disabled={!apiKey || isGenerating}
+                        >
+                          Generate with AI
+                        </Button>
+                        <Button 
+                          variant="outline"
+                          onClick={() => {
+                            setShowApiInput(false);
+                            handleGenerateCampaign();
+                          }}
+                        >
+                          Generate without AI (Demo Mode)
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
               )}
-            </div>
-          </TabsContent>
 
-          <TabsContent value="user-segments">
-            <UserSegmentManager onContentGenerated={handleContentGenerated} />
-            
-            {generatedPosts.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Generated Personalized Content</CardTitle>
-                  <CardDescription>
-                    AI-generated social media posts tailored to different user segments
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-4">
-                    {generatedPosts.map((post, index) => (
-                      <div key={index} className="p-4 border rounded-lg space-y-2">
-                        <div className="flex justify-between items-start">
-                          <Badge>{post.platform}</Badge>
-                          <Badge variant="outline">{post.targetSegment}</Badge>
-                        </div>
-                        <p className="text-sm">{post.content}</p>
-                        <div className="flex flex-wrap gap-1">
-                          {post.hashtags?.map((hashtag: string, idx: number) => (
-                            <span key={idx} className="text-xs text-primary">
-                              {hashtag}
-                            </span>
-                          ))}
-                        </div>
+              {isGenerating && (
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-center space-y-4">
+                      <div className="flex items-center justify-center gap-2">
+                        <Palette className="h-5 w-5 animate-spin" />
+                        <p className="text-foreground font-medium">
+                          Generating multi-language campaign content & images...
+                        </p>
                       </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
+                      <Progress value={generationProgress} className="w-full max-w-md mx-auto" />
+                      <p className="text-sm text-muted-foreground">
+                        {Math.round(generationProgress)}% complete
+                      </p>
+                      <div className="text-xs text-muted-foreground">
+                        Processing {files.catalog?.length} products × {config.languages.length} languages = {(files.catalog?.length || 0) * config.languages.length} content pieces
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
-          <TabsContent value="data-processing">
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>CSV Data Processing & Validation</CardTitle>
-                  <CardDescription>
-                    Upload and validate your product data for marketing automation
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <FileUpload onFileLoad={handleFileLoad} />
-                </CardContent>
-              </Card>
-
-              {rawData.length > 0 && (
-                <>
-                  <DataTable
-                    data={rawData.slice(0, 10)} 
-                    title={`Raw Data Preview (${fileName})`}
-                  />
-
-                  <ValidationResults 
-                    errors={validationErrors} 
-                    validCount={validData.length}
-                  />
-
-                  {validData.length > 0 && (
-                    <>
-                      <DataTable
-                        data={validData}
-                        title="Valid Data"
-                      />
-
-                      {!showAIInput && !isGenerating && enrichedData.length === 0 && (
-                        <div className="text-center">
-                          <Button
-                            onClick={() => setShowAIInput(true)}
-                            size="lg"
-                          >
-                            Generate AI Product Descriptions
-                          </Button>
-                        </div>
-                      )}
-
-                      {showAIInput && !isGenerating && (
-                        <OpenAIKeyInput 
-                          onKeySubmit={handleGenerateDescriptions}
-                          isLoading={isGenerating}
-                        />
-                      )}
-
-                      {isGenerating && (
-                        <Card>
-                          <CardContent className="pt-6">
-                            <div className="text-center space-y-4">
-                              <p className="text-foreground font-medium">
-                                Generating product descriptions...
-                              </p>
-                              <Progress value={generationProgress} className="w-full max-w-md mx-auto" />
-                              <p className="text-sm text-muted-foreground">
-                                {Math.round(generationProgress)}% complete
-                              </p>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {enrichedData.length > 0 && (
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-center">
-                            <h3 className="text-xl font-semibold">Enriched Data with AI Descriptions</h3>
-                            <ExportButton data={enrichedData} filename="enriched_products.csv" />
-                          </div>
-                          <DataTable
-                            data={enrichedData}
-                            title="Final Enriched Dataset"
-                            showDescription={true}
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-                </>
+              {results.length > 0 && (
+                <CampaignResults 
+                  results={results} 
+                  onExport={handleExportResults}
+                />
               )}
             </div>
-          </TabsContent>
-
-          <TabsContent value="api-integration">
-            <OpenAPIIntegration />
-          </TabsContent>
-
-          <TabsContent value="analytics">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="h-5 w-5" />
-                  Marketing Performance Analytics
-                </CardTitle>
-                <CardDescription>
-                  Track campaign performance, engagement metrics, and ROI
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <Card>
-                    <CardContent className="pt-6 text-center">
-                      <div className="text-3xl font-bold text-green-600">94%</div>
-                      <div className="text-sm text-muted-foreground">Campaign Success Rate</div>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card>
-                    <CardContent className="pt-6 text-center">
-                      <div className="text-3xl font-bold text-blue-600">2.8M</div>
-                      <div className="text-sm text-muted-foreground">Total Reach</div>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card>
-                    <CardContent className="pt-6 text-center">
-                      <div className="text-3xl font-bold text-purple-600">4.2x</div>
-                      <div className="text-sm text-muted-foreground">Average ROI</div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="mt-8 p-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border">
-                  <h4 className="font-semibold mb-4">Key Insights & Recommendations</h4>
-                  <ul className="space-y-2 text-sm">
-                    <li>• Puppy health content performs 3x better than general dog food posts</li>
-                    <li>• "Gut health" keywords show highest conversion rates (8.4%)</li>
-                    <li>• New puppy owner segment has 2x higher engagement</li>
-                    <li>• Instagram posts with user-generated content see 45% more shares</li>
-                    <li>• Morning posts (8-10 AM) generate optimal engagement for pet products</li>
-                  </ul>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
       </div>
     </div>
   );
